@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+jobs:
+  verificacion:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://demo:demo@localhost:5432/demo
+      DIRECT_URL: postgresql://demo:demo@localhost:5432/demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Instalar dependencias reproducibles
+        run: npm ci
+      - name: Generar cliente Prisma
+        run: npm run prisma:generate
+        env:
+          DATABASE_URL: postgresql://demo:demo@localhost:5432/demo
+          DIRECT_URL: postgresql://demo:demo@localhost:5432/demo
+      - name: Tipos
+        run: npm run typecheck
+      - name: Pruebas
+        run: npm test
+      - name: Compilar
+        run: npm run build

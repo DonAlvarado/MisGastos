@@ -1,0 +1,85 @@
+// Prisma 6.19.3 fijado intencionalmente: setup sencillo sin adapters obligatorios.
+// Las vistas, triggers, CHECK y los índices parciales viven en las migraciones SQL.
+// NO ejecutar prisma db push ni reescribir la migración inicial.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum rol_usuario {
+  USUARIO
+  ADMIN
+}
+
+enum estado_usuario {
+  ACTIVO
+  INACTIVO
+}
+
+enum tipo_movimiento {
+  INGRESO
+  GASTO
+}
+
+model usuario {
+  id_usuario       Int            @id @default(autoincrement())
+  nombre           String         @db.VarChar(100)
+  correo           String         @unique(map: "uq_usuario_correo") @db.VarChar(150)
+  password         String         @db.VarChar(255)
+  rol              rol_usuario    @default(USUARIO)
+  estado           estado_usuario @default(ACTIVO)
+  fecha_registro   DateTime       @default(now()) @db.Timestamp(6)
+  intentos_fallidos Int           @default(0)
+  bloqueado_hasta  DateTime?      @db.Timestamp(6)
+  token_version    Int            @default(0)
+  categorias       categoria[]
+  movimientos      movimiento[]
+  presupuestos     presupuesto[]
+}
+
+model categoria {
+  id_categoria    Int             @id @default(autoincrement())
+  nombre          String          @db.VarChar(60)
+  tipo            tipo_movimiento
+  predeterminada  Boolean         @default(false)
+  id_usuario      Int?
+  usuario         usuario?        @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: Cascade)
+  movimientos     movimiento[]
+  presupuestos    presupuesto[]
+  // Unicidad sobre LOWER(nombre) + dueño se garantiza en SQL (índices parciales).
+}
+
+model movimiento {
+  id_movimiento Int             @id @default(autoincrement())
+  descripcion   String?         @db.VarChar(255)
+  monto         Decimal         @db.Decimal(12, 2)
+  fecha         DateTime        @default(now()) @db.Timestamp(6)
+  tipo          tipo_movimiento
+  id_usuario    Int
+  id_categoria  Int
+  usuario       usuario         @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: Cascade)
+  categoria     categoria       @relation(fields: [id_categoria], references: [id_categoria], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_usuario, fecha(sort: Desc)], map: "ix_movimiento_usuario_fecha")
+  @@index([id_categoria], map: "ix_movimiento_categoria")
+  @@index([id_usuario, tipo], map: "ix_movimiento_usuario_tipo")
+}
+
+model presupuesto {
+  id_presupuesto Int       @id @default(autoincrement())
+  monto_limite   Decimal   @db.Decimal(12, 2)
+  mes            Int
+  anio           Int
+  id_usuario     Int
+  id_categoria   Int
+  usuario        usuario   @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: Cascade)
+  categoria      categoria @relation(fields: [id_categoria], references: [id_categoria], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([id_usuario, id_categoria, mes, anio], map: "uq_presupuesto_periodo")
+  @@index([id_usuario, anio, mes], map: "ix_presupuesto_usuario_periodo")
+}

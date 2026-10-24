@@ -1,0 +1,37 @@
+name: misgastos
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-misgastos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Crea un archivo .env a partir de .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-mis_gastos}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/seed:/seed:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-misgastos} -d ${POSTGRES_DB:-mis_gastos}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  app:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-misgastos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mis_gastos}?schema=public
+      DIRECT_URL: postgresql://${POSTGRES_USER:-misgastos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mis_gastos}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?Crea JWT_SECRET en el archivo .env}
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  pgdata:
