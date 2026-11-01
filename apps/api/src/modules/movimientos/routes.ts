@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Prisma, type tipo_movimiento } from '@prisma/client';
+import { Prisma, type tipo_movimiento } from '../../generated/prisma/client';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { requireAuth, requireRole } from '../../middleware/auth';

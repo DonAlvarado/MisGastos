@@ -25,7 +25,5 @@
   "@playwright/test": "^1.56.1",
   "concurrently": "^9.2.1"
  },
- "overrides": {
-  "deepmerge-ts": "^8.0.2"
- }
+ "overrides": {}
 }

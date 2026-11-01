@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { z } from 'zod';
 
 export const moneySchema = z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Monto inválido')
