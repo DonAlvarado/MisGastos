@@ -1,14 +1,15 @@
-// Prisma 6.19.3 fijado intencionalmente: setup sencillo sin adapters obligatorios.
+// Prisma 7.10.1.
 // Las vistas, triggers, CHECK y los índices parciales viven en las migraciones SQL.
 // NO ejecutar prisma db push ni reescribir la migración inicial.
+
 generator client {
-  provider = "prisma-client-js"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 enum rol_usuario {

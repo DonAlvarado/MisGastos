@@ -1,19 +1,29 @@
 {
-  "name": "misgastos",
-  "private": true,
-  "version": "0.1.0",
-  "workspaces": ["apps/api", "apps/web"],
-  "engines": {"node": ">=22.12.0"},
-  "scripts": {
-    "dev": "concurrently -n API,WEB -c cyan,green \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
-    "db:up": "docker compose up -d db",
-    "db:down": "docker compose down",
-    "db:migrate": "npm run db:migrate -w apps/api",
-    "db:seed": "docker compose exec -T db psql -v ON_ERROR_STOP=1 -U misgastos -d mis_gastos -f /seed/dev.sql",
-    "prisma:generate": "npm run prisma:generate -w apps/api",
-    "build": "npm run prisma:generate && npm run build -w apps/web && npm run build -w apps/api",
-    "test": "npm run test -w apps/api",
-    "typecheck": "npm run typecheck -w apps/web && npm run typecheck -w apps/api"
-  },
-  "devDependencies": {"concurrently": "^9.2.1"}
+ "name": "misgastos",
+ "private": true,
+ "version": "1.0.0",
+ "workspaces": [
+  "apps/api",
+  "apps/web"
+ ],
+ "engines": {
+  "node": ">=22.12.0"
+ },
+ "scripts": {
+  "dev": "concurrently -n API,WEB -c cyan,green \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+  "db:up": "docker compose up -d db",
+  "db:down": "docker compose down",
+  "db:migrate": "npm run db:migrate -w apps/api",
+  "db:seed": "npm run seed:local -w apps/api",
+  "prisma:generate": "npm run prisma:generate -w apps/api",
+  "build": "npm run prisma:generate && npm run build -w apps/web && npm run build -w apps/api",
+  "test": "npm run test -w apps/api",
+  "typecheck": "npm run typecheck -w apps/web && npm run typecheck -w apps/api",
+  "e2e": "playwright test"
+ },
+ "devDependencies": {
+  "@playwright/test": "^1.56.1",
+  "concurrently": "^9.2.1"
+ },
+ "overrides": {}
 }
