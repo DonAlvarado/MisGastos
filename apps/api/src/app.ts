@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { authRouter } from './modules/auth/routes';
-import { finanzasRouter } from './modules/movimientos/routes';
+import { categoriasRouter } from './modules/categorias/routes';
+import { movimientosRouter } from './modules/movimientos/routes';
+import { dashboardRouter } from './modules/dashboard/routes';
 
 export const app = express();
 app.set('trust proxy', 1); // Render y proxies conocidos: revisar antes de usar detrás de otro proxy.
@@ -25,7 +27,9 @@ app.use((req, res, next) => {
 
 app.get('/api/health', (_req, res) => { res.json({ status: 'ok', project: 'MisGastos' }); });
 app.use('/api/auth', authRouter);
-app.use('/api', finanzasRouter);
+app.use('/api/categorias', categoriasRouter);
+app.use('/api/movimientos', movimientosRouter);
+app.use('/api/dashboard', dashboardRouter);
 app.use('/api', (_req, res) => { res.status(404).json({ error: 'Ruta API no encontrada' }); });
 
 // En el contenedor de producción se sirve el build de React desde Express.
