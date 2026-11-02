@@ -3,62 +3,118 @@ import { Prisma, type tipo_movimiento } from '../../generated/prisma/client';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { requireAuth, requireRole } from '../../middleware/auth';
+import { moneySchema, dateSchema, fechaSQL, idSchema, prismaError } from '../../lib/validation';
 
-export const finanzasRouter = Router();
+export const movimientosRouter = Router();
 
+// Todas las rutas requieren sesión iniciada y rol USUARIO.
+movimientosRouter.use(requireAuth, requireRole('USUARIO'));
 
-finanzasRouter.get('/categorias', requireAuth, requireRole('USUARIO'), async (req, res, next) => {
-  try {
-    const id = req.currentUser!.id_usuario;
-    const categorias = await prisma.categoria.findMany({ where: {
-      OR: [{ predeterminada: true, id_usuario: null }, { id_usuario: id }]
-    }, orderBy: [{ tipo: 'asc' }, { nombre: 'asc' }], select: { id_categoria: true, nombre: true, tipo: true, predeterminada: true } });
-    res.json({ categorias });
-  } catch (err) { next(err); }
+const schema = z.object({
+  descripcion: z.string().trim().max(255).nullable().optional(),
+  monto: moneySchema,
+  tipo: z.enum(['INGRESO', 'GASTO']),
+  id_categoria: z.number().int().positive(),
+  fecha: dateSchema.optional()
 });
+const editSchema = schema.partial().refine(d => Object.keys(d).length > 0);
 
-finanzasRouter.get('/movimientos', requireAuth, requireRole('USUARIO'), async (req, res, next) => {
+// La categoría debe existir, ser del mismo tipo y ser global o del propio usuario.
+async function validCategory(idUser: number, idCategory: number, tipo: 'INGRESO' | 'GASTO') {
+  return prisma.categoria.findFirst({
+    where: {
+      id_categoria: idCategory,
+      tipo: tipo as tipo_movimiento,
+      OR: [{ predeterminada: true, id_usuario: null }, { id_usuario: idUser }]
+    },
+    select: { id_categoria: true }
+  });
+}
+
+// Lista solo los movimientos del usuario. Permite filtrar por tipo y máximo 200.
+movimientosRouter.get('/', async (req, res, next) => {
   try {
     const id = req.currentUser!.id_usuario;
+    const take = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
+    const where: Prisma.movimientoWhereInput = { id_usuario: id };
+    const tipo = z.enum(['INGRESO', 'GASTO']).safeParse(req.query.tipo);
+    if (tipo.success) where.tipo = tipo.data as tipo_movimiento;
+
     const movimientos = await prisma.movimiento.findMany({
-      where: { id_usuario: id }, orderBy: { fecha: 'desc' }, take: 50,
-      select: { id_movimiento: true, descripcion: true, monto: true, fecha: true, tipo: true,
-        categoria: { select: { nombre: true } } }
+      where,
+      orderBy: [{ fecha: 'desc' }, { id_movimiento: 'desc' }],
+      take,
+      select: {
+        id_movimiento: true, descripcion: true, monto: true, fecha: true, tipo: true,
+        id_categoria: true, categoria: { select: { nombre: true } }
+      }
     });
     res.json({ movimientos });
-  } catch (err) { next(err); }
+  } catch (e) { next(e); }
 });
 
-const nuevo = z.object({
-  descripcion: z.string().trim().max(255).optional(),
-  monto: z.string().regex(/^\d{1,10}(\.\d{1,2})?$/),
-  tipo: z.enum(['INGRESO', 'GASTO']),
-  id_categoria: z.number().int().positive()
-});
-
-finanzasRouter.post('/movimientos', requireAuth, requireRole('USUARIO'), async (req, res, next) => {
+// Crea un movimiento. El monto se guarda como Decimal para no perder centavos.
+movimientosRouter.post('/', async (req, res, next) => {
   try {
-    const body = nuevo.safeParse(req.body);
-    if (!body.success) { res.status(400).json({ error: 'Datos de movimiento inválidos' }); return; }
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: 'Movimiento inválido' }); return; }
+
     const id = req.currentUser!.id_usuario;
-    const { tipo, id_categoria, descripcion, monto } = body.data;
-    const cantidad = new Prisma.Decimal(monto);
-    if (cantidad.lte(0)) { res.status(400).json({ error: 'El monto debe ser positivo' }); return; }
-    const categoria = await prisma.categoria.findFirst({ where: {
-      id_categoria, tipo: tipo as tipo_movimiento,
-      OR: [{ predeterminada: true, id_usuario: null }, { id_usuario: id }]
-    }, select: { id_categoria: true } });
-    if (!categoria) { res.status(400).json({ error: 'Categoría inválida o sin permiso' }); return; }
-    const movimiento = await prisma.movimiento.create({ data: { descripcion, monto: cantidad, tipo, id_usuario: id, id_categoria } });
+    const { id_categoria, tipo, monto, descripcion, fecha } = parsed.data;
+    if (!await validCategory(id, id_categoria, tipo)) { res.status(400).json({ error: 'Categoría inválida o ajena' }); return; }
+
+    const movimiento = await prisma.movimiento.create({
+      data: {
+        id_usuario: id, id_categoria, tipo, descripcion,
+        monto: new Prisma.Decimal(monto),
+        ...(fecha ? { fecha: fechaSQL(fecha) } : {})
+      }
+    });
     res.status(201).json({ movimiento });
-  } catch (err) { next(err); }
+  } catch (e) { prismaError(e, res, next); }
 });
 
-finanzasRouter.get('/dashboard', requireAuth, requireRole('USUARIO'), async (req, res, next) => {
+// Edita un movimiento solo si es del usuario. Si es ajeno responde 404.
+movimientosRouter.put('/:id', async (req, res, next) => {
   try {
-    const id = req.currentUser!.id_usuario;
-    const filas = await prisma.$queryRaw<Array<{ total_ingresos: Prisma.Decimal; total_gastos: Prisma.Decimal; balance: Prisma.Decimal }>>`
-      SELECT total_ingresos, total_gastos, balance FROM v_balance_usuario WHERE id_usuario = ${id}`;
-    res.json({ resumen: filas[0] ?? { total_ingresos: '0.00', total_gastos: '0.00', balance: '0.00' } });
-  } catch (err) { next(err); }
+    const id = idSchema.safeParse(req.params.id);
+    const body = editSchema.safeParse(req.body);
+    if (!id.success || !body.success) { res.status(400).json({ error: 'Datos de movimiento inválidos' }); return; }
+
+    const owner = req.currentUser!.id_usuario;
+    const old = await prisma.movimiento.findFirst({ where: { id_movimiento: id.data, id_usuario: owner } });
+    if (!old) { res.status(404).json({ error: 'Movimiento no encontrado' }); return; }
+
+    const categoriaId = body.data.id_categoria ?? old.id_categoria;
+    const tipo = body.data.tipo ?? old.tipo;
+    if (!await validCategory(owner, categoriaId, tipo)) { res.status(400).json({ error: 'Categoría inválida o ajena' }); return; }
+
+    const { fecha, monto, ...rest } = body.data;
+    const result = await prisma.movimiento.updateMany({
+      where: { id_movimiento: id.data, id_usuario: owner },
+      data: {
+        ...rest,
+        ...(monto ? { monto: new Prisma.Decimal(monto) } : {}),
+        ...(fecha ? { fecha: fechaSQL(fecha) } : {})
+      }
+    });
+    if (!result.count) { res.status(404).json({ error: 'Movimiento no encontrado' }); return; }
+
+    const movimiento = await prisma.movimiento.findUnique({ where: { id_movimiento: id.data } });
+    res.json({ movimiento });
+  } catch (e) { prismaError(e, res, next); }
+});
+
+// Elimina un movimiento filtrando por id y dueño a la vez. Si es ajeno responde 404.
+movimientosRouter.delete('/:id', async (req, res, next) => {
+  try {
+    const id = idSchema.safeParse(req.params.id);
+    if (!id.success) { res.status(400).json({ error: 'ID inválido' }); return; }
+
+    const result = await prisma.movimiento.deleteMany({
+      where: { id_movimiento: id.data, id_usuario: req.currentUser!.id_usuario }
+    });
+    if (!result.count) { res.status(404).json({ error: 'Movimiento no encontrado' }); return; }
+    res.status(204).end();
+  } catch (e) { next(e); }
 });
