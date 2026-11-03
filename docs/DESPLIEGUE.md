@@ -1,45 +1,137 @@
-# Despliegue Render (Docker) + Neon (PostgreSQL)
+# Despliegue: Vercel (frontend) + Render (API) + Neon (PostgreSQL)
 
-## Por qué un dominio
+## Por qué esta separación
 
-React compilado se sirve con `express.static` y API Express por `/api` en un **mismo servicio web Render**. Evita lidiar con cookies de terceros entre dominios Vercel y Render. Docker solo contiene la app; Neon persiste datos independientemente de reinicios.
+El `Dockerfile` de la raíz construye **solo el API**: copia `apps/api`, genera el cliente Prisma y compila a `dist`. No compila ni copia el frontend. Por eso React se despliega aparte en Vercel.
 
-## Paso 1: Neon
+Para que la cookie de sesión funcione, el navegador nunca habla directo con Render. Vercel expone una función proxy en `apps/web/api/[...path].ts` que atiende todo lo que cuelga de `/api/` en el dominio de Vercel y lo reenvía al API. El navegador ve un solo origen, así que la cookie `__Host-mg_access` queda atada al dominio de Vercel y no hay cookies de terceros.
 
-1. Crear proyecto PostgreSQL gratuito en Neon.
-2. Copiar dos URLs de conexión: con pool para `DATABASE_URL`, **directa** para `DIRECT_URL` (Prisma CLI y migraciones). Usar SSL.
-3. Guardarlas únicamente en el panel de entorno seguro y, para aplicar migraciones desde un equipo autorizado, temporalmente en `apps/api/.env` local. No subirlas al repo ni enviarlas por chat.
-4. Aplicar el historial a Neon desde `apps/api` usando `npm run db:migrate` (o `npx prisma migrate deploy`).
-5. **No ejecutar `database/seed/dev.sql` en Neon**. Registrar un usuario nuevo; definir un proceso seguro separado para alta inicial de ADMIN.
-
-## Paso 2: Render
-
-1. New -> Web Service -> conectar el repositorio GitHub (evaluar acceso de equipo y privacidad).
-2. Runtime: **Docker**; Dockerfile Path: `./Dockerfile`; Docker build context: repo root.
-3. Plan Free si está disponible en la cuenta. Configurar variables **secretas**: `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET` aleatorio de al menos 32 caracteres, `NODE_ENV=production`. No se requiere URL del frontend, ya que API/React están bajo el mismo dominio. Render define `PORT`.
-4. Deploy; probar `https://TU-SERVICIO.onrender.com/api/health` y abrir `/`.
-5. Registrar usuario nuevo; validar login, movimientos y balance. Verificar que datos de un usuario no aparezcan en otra cuenta.
-
-## Paso 3: cada cambio en GitHub
-
-- Abrir PR, exigir CI, revisar migraciones.
-- Merge a main; Render autodespliega el contenedor nuevo.
-- Si hay una migración de DB, ejecutar `prisma migrate deploy` de forma controlada **antes de activar un cambio incompatible**. El Dockerfile no ejecuta migraciones automáticamente para evitar efectos inesperados durante arranque.
-
-## Límites y advertencias (verificar plan al crear cuenta)
-
-- Render Free detiene instancias inactivas después de 15 min. El reinicio puede tardar cerca de un minuto. No ofrece alta disponibilidad para una app financiera real.
-- Neon Free tiene cupos de almacenamiento y cómputo. Free database persistente **no** es equivalente a sincronizar la DB entre Docker y GitHub.
-- Se necesitan respaldos periódicos y un plan de recuperación si se trabaja con datos importantes. Para la evaluación usar exclusivamente información ficticia.
-
-## Alternativa local completamente contenerizada
-
-Una vez `npm install` y migraciones iniciales:
-
-```powershell
-docker compose --profile full build
-docker compose --profile full run --rm app npm run db:migrate
-docker compose --profile full up -d
+```
+navegador ──► https://TUAPP.vercel.app/api/...  (función proxy en Vercel)
+                        │
+                        └──► https://TUAPI.onrender.com/api/...  (Express en Render)
+                                      │
+                                      └──► PostgreSQL en Neon
 ```
 
-Entrar a `http://localhost:3001` (React + Express en el mismo servicio) con PostgreSQL local del compose. Para seed, usar `npm run db:seed` **solo si la BD está vacía**.
+## Paso 0. Antes de empezar
+
+- Todos los PR deben estar fusionados en `main` y `npm run build` debe pasar localmente.
+- `package-lock.json` debe estar en el repositorio y al día: Render usa `npm ci`.
+- No se cargan datos de prueba en Neon. No se suben `.env`, secretos ni volúmenes de Docker.
+
+## 1. Neon (PostgreSQL)
+
+1. Crear un proyecto en https://console.neon.tech.
+2. Copiar **dos** cadenas de conexión de la misma base:
+   - la **pooled** (el host suele llevar `-pooler`) para `DATABASE_URL`
+   - la **directa** para `DIRECT_URL`
+
+   Las dos con `sslmode=require`. La distinción importa: `apps/api/prisma.config.ts` apunta las migraciones a `DIRECT_URL`, porque el pooler no soporta las sentencias que Prisma necesita para migrar. El runtime, en cambio, usa `DATABASE_URL` a través del adaptador `PrismaPg`.
+
+3. Aplicar las migraciones **una sola vez**, desde un equipo autorizado. Respaldar antes el `.env` local, poner temporalmente las cadenas de Neon en `apps/api/.env` y ejecutar:
+
+   ```powershell
+   npm run prisma:generate
+   npm run db:migrate
+   ```
+
+   Eso aplica `20261024000100_inicial` y `20261024000200_seguridad_sesiones`.
+
+4. Verificar en Neon que existan las tablas `usuario`, `categoria`, `movimiento` y `presupuesto`. Restaurar el `.env` local al PostgreSQL de Docker.
+
+5. **No ejecutar `npm run db:seed` contra Neon.** Ese script crea usuarios de demostración con contraseñas conocidas. Las categorías iniciales se crean después desde el panel de administración.
+
+## 2. Render (API)
+
+1. https://dashboard.render.com → New → Web Service → conectar el repositorio.
+2. Configuración:
+   - Branch: `main`
+   - Runtime: **Docker**
+   - Root Directory: **vacío** (el `Dockerfile` está en la raíz y necesita el contexto completo del monorepo)
+   - Dockerfile Path: `./Dockerfile`
+   - Health Check Path: `/api/health`
+3. Variables de entorno (en el panel, nunca en Git):
+
+   | Variable | Valor |
+   |---|---|
+   | `DATABASE_URL` | cadena **pooled** de Neon |
+   | `DIRECT_URL` | cadena **directa** de Neon |
+   | `JWT_SECRET` | aleatorio de 32+ caracteres, distinto del local |
+   | `NODE_ENV` | `production` |
+   | `CLIENT_ORIGIN` | se llena en el paso 4, cuando exista el dominio de Vercel |
+
+   `PORT` no hace falta: Render lo inyecta y `server.ts` lo lee.
+
+4. Desplegar y guardar la URL real, del tipo `https://TUAPI.onrender.com`.
+5. Comprobar `GET https://TUAPI.onrender.com/api/health` → debe responder `{"status":"ok","project":"MisGastos"}`.
+
+> El plan gratuito duerme el servicio por inactividad. El primer acceso tras el reposo puede tardar cerca de un minuto. Antes de una demostración conviene abrir `/api/health` y esperar a que despierte.
+
+## 3. Vercel (frontend + proxy)
+
+1. https://vercel.com → Add New → Project → importar el mismo repositorio.
+2. Configuración:
+   - **Root Directory:** `apps/web`
+   - **Framework:** Vite
+   - Build y Output los toma de `apps/web/vercel.json`
+3. Variable de entorno: `BACKEND_ORIGIN = https://TUAPI.onrender.com`
+
+   **Sin `/api` al final y sin barra final.** Y sin prefijo `VITE_`: las variables `VITE_*` se incrustan en el bundle y quedan visibles para cualquiera que abra el inspector. `BACKEND_ORIGIN` solo debe existir del lado del servidor, que es donde corre la función proxy.
+
+4. Desplegar y copiar el dominio final.
+
+## 4. Cerrar el círculo
+
+1. Volver a Render y poner `CLIENT_ORIGIN = https://TUAPP.vercel.app` (el dominio exacto, sin barra final).
+2. Redesplegar el servicio de Render para que tome la variable.
+
+Este paso no es opcional. El middleware de origen en `apps/api/src/app.ts` rechaza con 403 cualquier POST, PUT, PATCH o DELETE cuyo `Origin` no esté en la lista permitida. Si `CLIENT_ORIGIN` no coincide con el dominio de Vercel, la aplicación carga pero no deja iniciar sesión ni guardar nada.
+
+## 5. Crear la cuenta de administrador
+
+No existe un endpoint público para otorgar el rol ADMIN; se hace a mano desde un equipo autorizado.
+
+Con las credenciales de Neon temporalmente en `apps/api/.env`, agregar:
+
+```
+ADMIN_NAME=Administrador
+ADMIN_EMAIL=admin@ejemplo.com
+ADMIN_PASSWORD=una_clave_de_12_o_mas_caracteres
+```
+
+Ejecutar:
+
+```powershell
+npm run admin:create -w apps/api
+```
+
+Borrar esas tres variables del `.env` enseguida. El script no imprime la contraseña y se niega a cambiarle el rol a una cuenta que ya exista.
+
+## 6. Verificación
+
+| Qué | Cómo | Resultado esperado |
+|---|---|---|
+| API viva | `https://TUAPI.onrender.com/api/health` | JSON con `status: ok` |
+| Proxy | `https://TUAPP.vercel.app/api/health` | el mismo JSON |
+| Sesión | iniciar sesión en el dominio de Vercel | cookie `__Host-mg_access`, marcada HttpOnly y Secure |
+| Permisos | usuario común entra a `/api/admin/usuarios` | 403 |
+| Revocación | el admin desactiva una cuenta conectada | esa sesión pasa a 401 en su siguiente acción |
+| Aislamiento | un usuario intenta tocar un movimiento ajeno | 403 o 404, nunca el dato |
+
+Si `https://TUAPP.vercel.app/api/health` devuelve HTML en lugar de JSON, Vercel no está reconociendo la función: revisar que el archivo se llame exactamente `apps/web/api/[...path].ts` (con corchetes), que el Root Directory sea `apps/web` y los logs de Functions.
+
+Si devuelve 503, falta `BACKEND_ORIGIN` o no empieza con `https://`. Si devuelve 502, el API de Render no respondió dentro de los 25 segundos que espera el proxy: lo más probable es que estuviera dormido, reintentar.
+
+## 7. Nota sobre permisos de despliegue
+
+En un repositorio privado con plan Vercel Hobby, un commit de un colaborador que no es el propietario del proyecto puede no disparar el build automático. Si pasa, el propietario despliega desde su equipo después de fusionar el PR:
+
+```powershell
+cd apps/web
+npx vercel login
+npx vercel link
+npx vercel --prod
+```
+
+No se modifica la autoría de los commits para sortear esta limitación.
