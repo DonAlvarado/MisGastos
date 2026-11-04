@@ -1,143 +1,63 @@
-import { useEffect, useState, type FormEvent } from 'react';
-
-type Usuario = { id_usuario: number; nombre: string; correo: string; rol: 'USUARIO' | 'ADMIN' };
-type Categoria = { id_categoria: number; nombre: string; tipo: 'GASTO' | 'INGRESO' };
-type Movimiento = { id_movimiento: number; descripcion: string | null; monto: string; fecha: string; tipo: 'GASTO' | 'INGRESO'; categoria: { nombre: string } };
-type Resumen = { total_ingresos: string; total_gastos: string; balance: string };
-
-async function api<T>(url: string, options?: RequestInit): Promise<T> {
-  const r = await fetch(`/api${url}`, { credentials: 'include', ...options,
-    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) } });
-  if (r.status === 204) return {} as T;
-  const data: unknown = await r.json();
-  if (!r.ok) {
-    const message = typeof data === 'object' && data !== null && 'error' in data ? String(data.error) : 'Error inesperado';
-    throw new Error(message);
-  }
-  return data as T;
-}
-
-function money(value: string) {
-  return new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(Number(value));
-}
-
-export default function App() {
-  const [usuario, setUsuario] = useState<Usuario | null>(null);
-  const [cargando, setCargando] = useState(true);
-  const [registro, setRegistro] = useState(false);
-  const [error, setError] = useState('');
-  const [resumen, setResumen] = useState<Resumen | null>(null);
-  const [categorias, setCategorias] = useState<Categoria[]>([]);
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
-  const [tipo, setTipo] = useState<'GASTO' | 'INGRESO'>('GASTO');
-  const [mensaje, setMensaje] = useState('');
-
-  useEffect(() => {
-    api<{ usuario: Usuario }>('/auth/me')
-      .then(d => setUsuario(d.usuario))
-      .catch(() => setUsuario(null))
-      .finally(() => setCargando(false));
-  }, []);
-
-  useEffect(() => {
-    if (!usuario || usuario.rol !== 'USUARIO') return;
-    void actualizarFinanzas();
-  }, [usuario]);
-
-  async function actualizarFinanzas() {
-    try {
-      const [r, c, m] = await Promise.all([
-        api<{ resumen: Resumen }>('/dashboard'),
-        api<{ categorias: Categoria[] }>('/categorias'),
-        api<{ movimientos: Movimiento[] }>('/movimientos')
-      ]);
-      setResumen(r.resumen); setCategorias(c.categorias); setMovimientos(m.movimientos);
-    } catch (e) { setError((e as Error).message); }
-  }
-
-  async function onAuth(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); setError('');
-    const form = new FormData(e.currentTarget);
-    const body = { nombre: String(form.get('nombre') ?? ''), correo: String(form.get('correo') ?? ''), password: String(form.get('password') ?? '') };
-    try {
-      const d = await api<{ usuario: Usuario }>(registro ? '/auth/register' : '/auth/login', { method: 'POST', body: JSON.stringify(body) });
-      setUsuario(d.usuario);
-    } catch (e) { setError((e as Error).message); }
-  }
-
-  async function onCrear(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); setError(''); setMensaje('');
-    const f = e.currentTarget;
-    const data = new FormData(f);
-    try {
-      await api('/movimientos', { method: 'POST', body: JSON.stringify({
-        descripcion: String(data.get('descripcion') ?? ''),
-        monto: String(data.get('monto')), tipo,
-        id_categoria: Number(data.get('categoria'))
-      }) });
-      setMensaje('Movimiento registrado.'); f.reset(); await actualizarFinanzas();
-    } catch (e) { setError((e as Error).message); }
-  }
-
-  async function logout() {
-    setError('');
-    try { await api('/auth/logout', { method: 'POST' }); setUsuario(null); setResumen(null); setMovimientos([]); }
-    catch (e) { setError((e as Error).message); }
-  }
-
-  if (cargando) return <main className="container"><p>Cargando aplicación...</p></main>;
-  return <div className="app-shell">
-    <header className="header"><div className="brand"><span className="brand-mark">MG</span><strong>Mis Gastos</strong></div>
-      {usuario && <button className="btn outline" onClick={() => void logout()}>Cerrar sesión</button>}</header>
-    <main className="container">
-      {error && <p role="alert" className="alert">{error}</p>}
-      {!usuario ? <section className="login-card">
-        <p className="eyebrow">FINANZAS PERSONALES</p>
-        <h1>{registro ? 'Crea tu cuenta' : 'Bienvenido a Mis Gastos'}</h1>
-        <p className="subtle">Controla tus ingresos, gastos y presupuestos en un mismo lugar.</p>
-        <form onSubmit={e => void onAuth(e)}>
-          {registro && <label>Nombre<input name="nombre" required maxLength={100} autoComplete="name"/></label>}
-          <label>Correo electrónico<input name="correo" type="email" required autoComplete="email"/></label>
-          <label>Contraseña<input name="password" type="password" minLength={8} required autoComplete={registro ? 'new-password' : 'current-password'}/></label>
-          <button className="btn primary" type="submit">{registro ? 'Registrarme' : 'Iniciar sesión'}</button>
-        </form>
-        <button className="link" onClick={() => { setRegistro(!registro); setError(''); }}>
-          {registro ? 'Ya tengo una cuenta' : 'Crear cuenta nueva'}
-        </button>
-      </section> : <>
-        <p className="eyebrow">PANEL PRINCIPAL</p><h1>Hola, {usuario.nombre}</h1>
-        <p className="subtle">Sesión activa como {usuario.rol === 'ADMIN' ? 'administrador' : 'usuario'}.</p>
-        {usuario.rol === 'ADMIN' ? <section className="panel"><h2>Panel administrador</h2><p>Acceso autorizado. Pendiente: gestión de usuarios y categorías predeterminadas. No se muestran finanzas ajenas.</p></section> : <>
-          <div className="cards">
-            <article className="card"><span>Ingresos</span><strong>{money(resumen?.total_ingresos ?? '0')}</strong></article>
-            <article className="card"><span>Gastos</span><strong>{money(resumen?.total_gastos ?? '0')}</strong></article>
-            <article className="card"><span>Balance</span><strong>{money(resumen?.balance ?? '0')}</strong></article>
-          </div>
-          <div className="columns"><section className="panel">
-            <h2>Registrar movimiento</h2>
-            <form onSubmit={e => void onCrear(e)}>
-              <label>Tipo<select value={tipo} onChange={e => setTipo(e.target.value as 'GASTO' | 'INGRESO')}><option value="GASTO">Gasto</option><option value="INGRESO">Ingreso</option></select></label>
-              <label>Categoría<select name="categoria" required defaultValue="" key={tipo}>
-                <option value="" disabled>Selecciona una categoría</option>
-                {categorias.filter(c => c.tipo === tipo).map(c => <option key={c.id_categoria} value={c.id_categoria}>{c.nombre}</option>)}
-              </select></label>
-              <label>Monto (Q)<input name="monto" type="text" required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" placeholder="250.00"/></label>
-              <label>Descripción<input name="descripcion" maxLength={255}/></label>
-              <button className="btn primary">Guardar movimiento</button>
-              {mensaje && <p role="status" className="success">{mensaje}</p>}
-            </form>
-          </section><section className="panel">
-            <h2>Movimientos recientes</h2>
-            {movimientos.length === 0 ? <p className="subtle">Todavía no hay movimientos registrados.</p> : <div className="movimientos">
-              {movimientos.map(m => <div className="movimiento" key={m.id_movimiento}>
-                <div><strong>{m.categoria.nombre}</strong><small>{m.descripcion || new Date(m.fecha).toLocaleDateString('es-GT')}</small></div>
-                <span className={m.tipo === 'GASTO' ? 'negative' : 'positive'}>{m.tipo === 'GASTO' ? '−' : '+'}{money(m.monto)}</span>
-              </div>)}
-            </div>}
-          </section></div>
-          <p className="footnote">Base inicial: todavía faltan presupuestos, filtros, edición, eliminación, pruebas completas y panel de administración.</p>
-        </>}
-      </>}
-    </main>
-  </div>;
+import {useEffect,useState,type FormEvent} from 'react';
+import {api,moneda,type Categoria,type Periodo,type Resumen,type Usuario} from './lib/api';
+import {MovimientoPanel} from './components/MovimientoPanel';
+import {CategoriaPanel} from './components/CategoriaPanel';
+import {PresupuestoPanel} from './components/PresupuestoPanel';
+import {AdminPanel} from './components/AdminPanel';
+type Tab='inicio'|'movimientos'|'categorias'|'presupuestos'|'admin';
+export default function App(){
+ const [usuario,setUsuario]=useState<Usuario|null>(null),[cargando,setCargando]=useState(true);
+ const [registro,setRegistro]=useState(false),[error,setError]=useState(''),[tab,setTab]=useState<Tab>('inicio');
+ const [resumen,setResumen]=useState<Resumen|null>(null),[periodo,setPeriodo]=useState<Periodo|null>(null),[categorias,setCategorias]=useState<Categoria[]>([]);
+ useEffect(()=>{api<{usuario:Usuario}>('/auth/me').then(d=>setUsuario(d.usuario)).catch(()=>setUsuario(null)).finally(()=>setCargando(false));},[]);
+ useEffect(()=>{if(usuario?.rol==='USUARIO')void refresh().catch(e=>setError((e as Error).message));
+  if(usuario?.rol==='ADMIN')setTab('admin');},[usuario]);
+ async function refresh(){const [r,c]=await Promise.all([api<{resumen:Resumen;periodo:Periodo}>('/dashboard'),api<{categorias:Categoria[]}>('/categorias')]);
+ setResumen(r.resumen);setPeriodo(r.periodo);setCategorias(c.categorias);}
+ async function submitAuth(e:FormEvent<HTMLFormElement>){e.preventDefault();setError('');const d=new FormData(e.currentTarget);
+ try{const result=await api<{usuario:Usuario}>(registro?'/auth/register':'/auth/login',{method:'POST',body:JSON.stringify({
+  nombre:String(d.get('nombre')??''),correo:String(d.get('correo')??''),password:String(d.get('password')??'')
+ })});setUsuario(result.usuario);setTab(result.usuario.rol==='ADMIN'?'admin':'inicio');}
+ catch(e){setError((e as Error).message);}}
+ async function logout(){try{await api('/auth/logout',{method:'POST'});setUsuario(null);setResumen(null);setPeriodo(null);setTab('inicio');setError('');}
+ catch(e){setError((e as Error).message);}}
+ if(cargando)return <main className="container"><p role="status">Cargando...</p></main>;
+ return <div className="shell"><header className="header"><div className="brand"><span className="logo">MG</span><strong>Mis Gastos</strong><span className="brand-sub">Finanzas personales</span></div>
+  {usuario&&<div className="header-right"><span className="welcome">{usuario.nombre}</span><button className="btn outline" onClick={()=>void logout()}>Cerrar sesión</button></div>}
+ </header><main className="container">
+ {error&&<p role="alert" className="alert">{error} <button className="mini" onClick={()=>setError('')}>Cerrar</button></p>}
+ {!usuario?<section className="auth panel"><p className="eyebrow">TU DINERO, BAJO CONTROL</p><h1>{registro?'Crea tu cuenta':'Bienvenido a Mis Gastos'}</h1>
+  <p className="muted">Organiza tus ingresos, gastos y presupuestos en un solo lugar.</p>
+  <form onSubmit={e=>void submitAuth(e)}>{registro&&<label>Nombre completo<input name="nombre" required autoComplete="name" maxLength={100}/></label>}
+   <label>Correo electrónico<input type="email" name="correo" required autoComplete="email"/></label>
+   <label>Contraseña<input type="password" name="password" required minLength={registro?10:1} maxLength={128} autoComplete={registro?'new-password':'current-password'}/></label>
+   <button className="btn primary" type="submit">{registro?'Crear cuenta':'Ingresar'}</button></form>
+  <button className="link" type="button" onClick={()=>{setRegistro(!registro);setError('');}}>{registro?'Ya tengo una cuenta':'¿No tienes cuenta? Regístrate'}</button>
+ </section>:<>
+ <div className="greeting"><p className="eyebrow">PANEL DE CONTROL</p><h1>Hola, {usuario.nombre.split(' ')[0]} 👋</h1><p className="muted">Consulta y organiza tus finanzas personales.</p></div>
+ <nav className="tabs" aria-label="Secciones principales">
+ {(usuario.rol==='ADMIN'?[['admin','Administración']]:[['inicio','Resumen'],['movimientos','Movimientos'],['categorias','Categorías'],['presupuestos','Presupuestos']]).map(([key,label])=><button key={key} className={tab===key?'tab active':'tab'} aria-current={tab===key?'page':undefined} onClick={()=>{setTab(key as Tab);setError('');}}>{label}</button>)}
+ </nav>
+ {usuario.rol==='ADMIN'?<AdminPanel/>:tab==='movimientos'?<MovimientoPanel categorias={categorias} refresh={refresh}/>:
+ tab==='categorias'?<CategoriaPanel categorias={categorias} refresh={refresh}/>:
+ tab==='presupuestos'?<PresupuestoPanel categorias={categorias} refresh={refresh}/>:
+ <section className="space"><div className="stat-grid">
+  <article className="stat"><span>Balance total</span><strong>{moneda(resumen?.balance??0)}</strong><small>Ingresos menos gastos acumulados</small></article>
+  <article className="stat"><span>Ingresos acumulados</span><strong className="positive">{moneda(resumen?.total_ingresos??0)}</strong><small>Todos los movimientos registrados</small></article>
+  <article className="stat"><span>Gastos acumulados</span><strong className="negative">{moneda(resumen?.total_gastos??0)}</strong><small>Todos los movimientos registrados</small></article>
+ </div><section className="panel"><div className="section-head"><div><h2>Resumen del mes</h2><p>
+  {periodo
+    ? `${periodo.mes}/${periodo.anio} · tus categorías principales`
+    : 'Resumen mensual no disponible por el momento'}
+</p></div></div>
+ <div className="stat-grid mini-stats"><div><span>Ingresos del mes</span><strong>{periodo ? moneda(periodo.ingresos) : '—'}</strong></div><div><span>Gastos del mes</span><strong></strong></div><div><span>Balance del mes</span><strong>{periodo ? moneda(periodo.balance) : '—'}</strong></div></div>
+ <h3>Distribución de gastos</h3>{!periodo?.gastos_por_categoria.length?<p className="muted">
+  {periodo
+    ? 'Aún no hay gastos registrados para este mes.'
+    : 'La distribución mensual no está disponible por el momento.'}
+</p>:
+ <div className="list">{periodo.gastos_por_categoria.map(c=><div className="item" key={c.id_categoria}><strong>{c.nombre}</strong><span>{moneda(c.monto)}</span></div>)}</div>}
+ </section></section>}
+ </>}
+ </main><footer className="footer">Mis Gastos · Proyecto académico de Programación Web · URL</footer></div>;
 }
