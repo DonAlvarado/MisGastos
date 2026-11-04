@@ -6,7 +6,7 @@ COPY apps/api/package*.json ./apps/api/
 COPY apps/web/package*.json ./apps/web/
 RUN npm ci --no-audit --no-fund
 COPY apps/api ./apps/api
-RUN npm run prisma:generate -w apps/api && npm run build -w apps/api
+RUN DIRECT_URL="postgresql://build:build@localhost:5432/build" npm run prisma:generate -w apps/api && npm run build -w apps/api
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
