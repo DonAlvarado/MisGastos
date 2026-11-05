@@ -174,7 +174,7 @@ Estas medidas deben complementarse con pruebas funcionales y de seguridad antes 
 - [Seguridad](docs/SEGURIDAD.md)
 - [Despliegue](docs/DESPLIEGUE.md)
 - [Organización del equipo y Git](docs/EQUIPO_Y_GIT.md)
-- **Manual de usuario con capturas (PDF):** pendiente de incorporación al repositorio.
+- [Manual de usuario con capturas](docs/Manual%20de%20Uso.pdf)
 
 ## Colaboración
 
